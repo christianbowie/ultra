@@ -144,11 +144,23 @@ pub async fn strip_shared_chunks_atom(
     }
 
     let settings = core.get_settings_map().await.unwrap_or_default();
+    // Dynamic default: when the atom has many near-identical neighbors,
+    // requiring a line to match in 2+ of them hides partial clusters where
+    // a runbook template has many siblings but each shares only a subset
+    // of labels. We scale the floor down to `ceil(len / 4)` for 3+
+    // neighbors (min 1), so a 8-sibling cluster like the app-support
+    // runbooks strips any line present in >= 2 siblings. An explicit
+    // `boilerplate_strip_min_neighbor_matches` setting still wins.
+    let dynamic_default: usize = if neighbor_contents.len() >= 3 {
+        (neighbor_contents.len() / 4).max(1)
+    } else {
+        DEFAULT_MIN_NEIGHBOR_MATCHES
+    };
     let min_matches = settings
         .get("boilerplate_strip_min_neighbor_matches")
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|n| *n >= 1)
-        .unwrap_or(DEFAULT_MIN_NEIGHBOR_MATCHES)
+        .unwrap_or(dynamic_default)
         // Can't require more matches than we have neighbors.
         .min(neighbor_contents.len());
 
@@ -222,6 +234,25 @@ pub async fn strip_shared_chunks_atom(
         tag_ids: Some(atom.tags.iter().map(|t| t.id.clone()).collect()),
     };
     core.update_atom(&atom.atom.id, upd, |_| {}).await?;
+
+    // Auto-dismiss the boilerplate_pollution entry for this atom. The
+    // pipeline will re-embed and recompute semantic edges; if the
+    // remaining content still overlaps with siblings, the atom would
+    // otherwise flash back into the review queue within seconds. The user
+    // stripped what our line-level comparison identified as shared — if
+    // the row needs to reappear the user can un-dismiss or re-scan to
+    // surface it intentionally.
+    if let Err(e) = core
+        .dismiss_health_item(
+            "boilerplate_pollution",
+            &atom.atom.id,
+            "Stripped shared lines — dismissed pending re-embed",
+            None,
+        )
+        .await
+    {
+        tracing::warn!(atom_id = %atom.atom.id, error = %e, "failed to auto-dismiss boilerplate_pollution after strip");
+    }
 
     let fix_id = audit::log_fix(
         core,

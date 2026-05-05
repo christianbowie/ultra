@@ -144,3 +144,45 @@ async fn strip_shared_chunks_is_noop_when_no_neighbors() {
         "solo atom must be returned unchanged — UI can show 'no boilerplate found'",
     );
 }
+#[tokio::test]
+async fn strip_shared_chunks_auto_dismisses_boilerplate_pollution() {
+    let mock = MockAiServer::start().await;
+    let handle = setup_core(Backend::Sqlite, &mock.base_url())
+        .await
+        .expect("harness");
+    let core = &handle.core;
+
+    let markers = ["AlphaService", "BravoService", "CharlieService", "DeltaService"];
+    let mut ids = Vec::new();
+    for marker in markers.iter() {
+        let id = make_atom(core, &atom_body(marker)).await;
+        ids.push(id);
+    }
+    let target = ids[0].clone();
+
+    // Pre-condition: no dismissal for this atom yet.
+    let before = core
+        .list_dismissed_keys("boilerplate_pollution")
+        .await
+        .expect("list dismissals");
+    assert!(
+        !before.iter().any(|(k, _)| k == &target),
+        "target must not already be dismissed before strip",
+    );
+
+    // Apply (dry_run = false) so the strip commits and auto-dismisses.
+    let (_new_content, action) = strip_shared_chunks_atom(core, &target, false)
+        .await
+        .expect("strip apply");
+    assert!(action.is_some(), "apply must produce a FixAction");
+
+    let after = core
+        .list_dismissed_keys("boilerplate_pollution")
+        .await
+        .expect("list dismissals");
+    assert!(
+        after.iter().any(|(k, _)| k == &target),
+        "strip must auto-dismiss the boilerplate_pollution entry for this atom so the review row doesn't flicker back after re-embed",
+    );
+}
+
