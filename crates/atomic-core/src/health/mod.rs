@@ -29,6 +29,7 @@
 pub mod audit;
 pub mod checks;
 pub mod compute;
+pub mod chunk_strip;
 pub mod custom;
 pub mod fixes;
 pub mod gc_task;

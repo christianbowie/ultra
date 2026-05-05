@@ -328,6 +328,19 @@ async fn apply_manual_fix_impl(
             }
         }
 
+        // === Boilerplate: deterministic chunk-hash strip ===
+        ("boilerplate_pollution", "strip_shared_chunks") => {
+            let (content, action) = atomic_core::health::chunk_strip::strip_shared_chunks_atom(
+                core, item_id, req.dry_run,
+            )
+            .await?;
+            Ok(serde_json::json!({
+                "content": content,
+                "action": action,
+                "dry_run": req.dry_run,
+            }))
+        }
+
         // === Boilerplate: re-embed ===
         ("boilerplate_pollution", "reembed") => {
             core.retry_embedding(item_id, |_| {}).await?;
