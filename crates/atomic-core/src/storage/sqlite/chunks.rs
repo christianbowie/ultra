@@ -37,6 +37,15 @@ impl SqliteStorage {
             "UPDATE atoms SET embedding_status = ?2, embedding_error = ?3 WHERE id = ?1",
             rusqlite::params![atom_id, status, error],
         )?;
+        if status == "complete" {
+            conn.execute(
+                "UPDATE atom_pipeline_jobs SET embed_requested = 0 \
+                 WHERE atom_id = ?1 \
+                   AND embed_requested = 1 \
+                   AND atom_updated_at = (SELECT updated_at FROM atoms WHERE id = ?1)",
+                [atom_id],
+            )?;
+        }
         Ok(())
     }
 
@@ -76,6 +85,25 @@ impl SqliteStorage {
             &sql,
             rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
         )?;
+        if status == "complete" {
+            let clear_placeholders = atom_ids
+                .iter()
+                .enumerate()
+                .map(|(i, _)| format!("?{}", i + 1))
+                .collect::<Vec<_>>()
+                .join(",");
+            let clear_sql = format!(
+                "UPDATE atom_pipeline_jobs SET embed_requested = 0 \
+                 WHERE atom_id IN ({}) \
+                   AND embed_requested = 1 \
+                   AND atom_updated_at = (SELECT updated_at FROM atoms WHERE id = atom_pipeline_jobs.atom_id)",
+                clear_placeholders
+            );
+            conn.execute(
+                &clear_sql,
+                rusqlite::params_from_iter(atom_ids.iter()),
+            )?;
+        }
         Ok(())
     }
 
@@ -94,6 +122,15 @@ impl SqliteStorage {
             "UPDATE atoms SET tagging_status = ?2, tagging_error = ?3 WHERE id = ?1",
             rusqlite::params![atom_id, status, error],
         )?;
+        if status == "complete" || status == "skipped" {
+            conn.execute(
+                "UPDATE atom_pipeline_jobs SET tag_requested = 0 \
+                 WHERE atom_id = ?1 \
+                   AND tag_requested = 1 \
+                   AND atom_updated_at = (SELECT updated_at FROM atoms WHERE id = ?1)",
+                [atom_id],
+            )?;
+        }
         Ok(())
     }
 
@@ -999,6 +1036,14 @@ impl SqliteStorage {
                 ])?;
             }
         }
+        // Cleanup rows where both flags were cleared by step-wise completion
+        // (embed_requested cleared on embedding_status=complete, tag_requested cleared
+        // on tagging_status=complete/skipped) but the main atom_updated_at-gated
+        // DELETE above could not fire because the atom was re-queued mid-processing.
+        tx.execute(
+            "DELETE FROM atom_pipeline_jobs WHERE embed_requested = 0 AND tag_requested = 0",
+            [],
+        )?;
         tx.commit()
             .map_err(|e| AtomicCoreError::DatabaseOperation(e.to_string()))?;
         Ok(())
