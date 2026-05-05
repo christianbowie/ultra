@@ -2155,58 +2155,80 @@ async fn process_queued_pipeline_jobs_inner<F>(
 where
     F: Fn(EmbeddingEvent) + Send + Sync + Clone + 'static,
 {
-    let run_id = Uuid::new_v4().to_string();
-    let mut batches = Vec::new();
-    let mut total_count = 0usize;
-    let mut embedding_total = 0usize;
-
-    loop {
-        let now = chrono::Utc::now();
-        let lease_until = (now + chrono::Duration::minutes(30)).to_rfc3339();
-        let now = now.to_rfc3339();
-        let jobs = storage
-            .claim_pipeline_jobs_sync(PENDING_BATCH_SIZE, &lease_until, &now)
-            .await
-            .map_err(|e| e.to_string())?;
-
-        if jobs.is_empty() {
-            break;
-        }
-
-        total_count += jobs.len();
-        embedding_total += jobs.iter().filter(|job| job.embed_requested).count();
-        batches.push(jobs);
-    }
-
-    if total_count == 0 {
+    // Peek at whether there is anything to process before committing to a spawn.
+    // We claim inside the spawn (after acquiring the semaphore) so that jobs stay
+    // state='pending' while waiting for capacity. That lets the DraftPipeline or
+    // another caller claim and process them if the semaphore is saturated, avoiding
+    // the observed behaviour where atoms.embedding_status sits 'pending' for minutes
+    // while the job is claimed but blocked behind a large in-flight batch.
+    let pending_count = storage
+        .count_pipeline_jobs_sync()
+        .await
+        .map_err(|e| e.to_string())?;
+    if pending_count == 0 {
         return Ok(0);
     }
 
-    on_event(EmbeddingEvent::PipelineQueueStarted {
-        run_id: run_id.clone(),
-        total_jobs: total_count,
-        embedding_total,
-    });
-    if embedding_total > 0 {
-        on_event(EmbeddingEvent::PipelineQueueProgress {
-            run_id: run_id.clone(),
-            stage: "embedding".to_string(),
-            completed: 0,
-            total: embedding_total,
-        });
-    }
-
+    let run_id = Uuid::new_v4().to_string();
     let storage = storage.clone();
     let on_event = on_event.clone();
     let settings = external_settings.clone();
     let canvas_cache = canvas_cache.clone();
-    let progress = Arc::new(QueueRunProgress::new(run_id.clone()));
 
     crate::executor::spawn(async move {
         let _permit = crate::executor::EMBEDDING_BATCH_SEMAPHORE
             .acquire()
             .await
             .expect("Embedding batch semaphore closed unexpectedly");
+
+        // Claim jobs now that we have capacity. Another worker may have already
+        // processed some or all of them — that is fine; we just process what's left.
+        let mut batches = Vec::new();
+        let mut total_count = 0usize;
+        let mut embedding_total = 0usize;
+
+        loop {
+            let now = chrono::Utc::now();
+            let lease_until = (now + chrono::Duration::minutes(30)).to_rfc3339();
+            let now = now.to_rfc3339();
+            let jobs = match storage
+                .claim_pipeline_jobs_sync(PENDING_BATCH_SIZE, &lease_until, &now)
+                .await
+            {
+                Ok(j) => j,
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to claim pipeline jobs");
+                    break;
+                }
+            };
+            if jobs.is_empty() {
+                break;
+            }
+            total_count += jobs.len();
+            embedding_total += jobs.iter().filter(|job| job.embed_requested).count();
+            batches.push(jobs);
+        }
+
+        if total_count == 0 {
+            // All jobs were processed by another worker while we waited for the semaphore.
+            return;
+        }
+
+        on_event(EmbeddingEvent::PipelineQueueStarted {
+            run_id: run_id.clone(),
+            total_jobs: total_count,
+            embedding_total,
+        });
+        if embedding_total > 0 {
+            on_event(EmbeddingEvent::PipelineQueueProgress {
+                run_id: run_id.clone(),
+                stage: "embedding".to_string(),
+                completed: 0,
+                total: embedding_total,
+            });
+        }
+
+        let progress = Arc::new(QueueRunProgress::new(run_id.clone()));
 
         for jobs in batches {
             process_pipeline_jobs_batch(
@@ -2228,7 +2250,7 @@ where
         });
     });
 
-    Ok(total_count as i32)
+    Ok(pending_count)
 }
 
 /// Convert L2 distance to cosine similarity for normalized vectors
