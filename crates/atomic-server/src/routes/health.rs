@@ -810,6 +810,34 @@ pub async fn get_latest_tag_proposal(db: Db) -> HttpResponse {
     }
 }
 
+
+#[derive(serde::Deserialize)]
+pub struct ManualTagProposalRequest {
+    pub summary: String,
+    pub actions: Vec<atomic_core::health::TagProposalAction>,
+}
+
+/// POST /api/health/tag-proposal/manual — save a hand-crafted proposal and apply it immediately.
+pub async fn apply_manual_tag_actions(
+    db: Db,
+    body: web::Json<ManualTagProposalRequest>,
+) -> HttpResponse {
+    let proposal = atomic_core::health::TagProposal {
+        id: uuid::Uuid::new_v4().to_string(),
+        summary: body.summary.clone(),
+        actions: body.actions.clone(),
+        generated_at: chrono::Utc::now().to_rfc3339(),
+    };
+    let proposal_id = proposal.id.clone();
+    let indices: Vec<usize> = (0..proposal.actions.len()).collect();
+    if let Err(e) = db.0.save_tag_proposal(proposal).await {
+        return crate::error::error_response(e);
+    }
+    match atomic_core::health::llm_fixes::apply_tag_proposal(&db.0, &proposal_id, &indices).await {
+        Ok(actions) => HttpResponse::Ok().json(actions),
+        Err(e) => crate::error::error_response(e),
+    }
+}
 // ==================== Health Config ====================
 
 /// GET /api/health/config

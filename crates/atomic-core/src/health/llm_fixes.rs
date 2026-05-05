@@ -1134,10 +1134,11 @@ pub async fn propose_tag_restructure(
         .take(500)
         .map(|t| {
             json!({
-                "id":         t.tag.id,
-                "name":       t.tag.name,
-                "parent_id":  t.tag.parent_id,
-                "atom_count": t.atom_count,
+                "id":               t.tag.id,
+                "name":             t.tag.name,
+                "parent_id":        t.tag.parent_id,
+                "atom_count":       t.atom_count,
+                "autotag_target":   t.tag.is_autotag_target,
             })
         })
         .collect();
@@ -1154,6 +1155,9 @@ pub async fn propose_tag_restructure(
     let prompt = format!(
         "You are a knowledge-base curator.  Analyse the tag tree below and propose a \
 better organisation.\n\n\
+Field meanings:\n\
+- `autotag_target`: true = this tag is used as an anchor for auto-classification; avoid \
+  reparenting or deleting these unless strictly necessary as it affects future atom tagging.\n\n\
 Rules:\n\
 - Propose MERGES for near-duplicate tag names (same concept, different spelling or casing).\n\
 - Propose RENAMES for tags whose names are unclear or inconsistent.\n\

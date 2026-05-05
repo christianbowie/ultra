@@ -2181,6 +2181,14 @@ impl AtomicCore {
         self.storage.get_latest_tag_proposal_sync().await
     }
 
+    /// Persist a manually-constructed tag proposal without calling the LLM.
+    pub async fn save_tag_proposal(
+        &self,
+        proposal: crate::health::TagProposal,
+    ) -> Result<(), AtomicCoreError> {
+        self.storage.save_tag_proposal_sync(proposal).await
+    }
+
     /// Persist a health dismissal (insert or update).
     pub async fn dismiss_health_item(
         &self,

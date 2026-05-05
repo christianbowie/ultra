@@ -370,6 +370,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     cfg.route("/health/verify/{check}", web::post().to(health::verify_batch_handler));
     cfg.route("/health/tag-proposal", web::post().to(health::create_tag_proposal));
     cfg.route("/health/tag-proposal/latest", web::get().to(health::get_latest_tag_proposal));
+    cfg.route("/health/tag-proposal/manual", web::post().to(health::apply_manual_tag_actions));
     cfg.route("/health/tag-proposal/{proposal_id}/apply", web::post().to(health::apply_tag_proposal));
     cfg.route("/health/config", web::get().to(health::get_health_config));
     cfg.route("/health/config", web::put().to(health::set_health_config));
