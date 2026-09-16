@@ -53,7 +53,7 @@ chrono = { version = "0.4", features = ["serde"] }
 reqwest = { version = "0.12", features = ["json"] }
 
 # MCP server
-rmcp = { version = "0.15", features = ["server", "macros", "transport-streamable-http-server"] }
+rmcp = { version = "2.0", features = ["server", "macros", "transport-streamable-http-server"] }
 schemars = "1.0"
 
 # OpenAPI
